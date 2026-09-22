@@ -38,6 +38,11 @@ cp -n .env.example .env
 - `GROKBOT2API_KEY`：Pi 访问 sidecar 的共享密钥；不是 Grok Bot Token。
 - Grok Bot access token / machine ID：只交给 sidecar 的凭据提供器，不放进 Pi 配置。
 
+`GROKBOT_UPSTREAM_MODE=ai-stream-chat` 是桌面 `AiService/StreamChat` 的
+协议诊断模式；它不能处理 Pi 工具定义或工具结果。在这台机器上，该模式已
+通过认证到达上游但于 September 22, 2026 收到 `unimplemented`，因此不是
+旧 `inference` 的可用替代方案。
+
 ```sh
 node --env-file=.env bin/grokbot2api.mjs
 ```
@@ -103,7 +108,7 @@ cp -n examples/pi/models.json ~/.pi/agent/models.json
 pi --provider grokbot --model grok-4.5 --thinking off --no-tools -p "只回复 OK"
 ```
 
-再从本项目目录做只读工具验证：
+只有使用默认 `inference` 模式、且文字验收成功后，才从本项目目录做只读工具验证：
 
 ```sh
 pi --provider grokbot --model grok-4.5 --thinking off --tools read \
@@ -140,6 +145,8 @@ npm run check
 
 ## 仍然存在的边界
 
+- `GROKBOT_UPSTREAM_MODE=ai-stream-chat` 仅支持文字；它会明确返回
+  `upstream_tools_not_supported`，不是 Pi 的工具故障或登录故障。
 - 单个 sidecar 只允许一个生成请求，多个 Pi 会话同时请求会得到 `429 concurrency_limited`。
 - 使用 Pi 完整历史回传方式；不支持服务端 `previous_response_id` 历史恢复。
 - 不支持图片、文件输入、内置搜索、自定义 grammar 工具、完整 reasoning 内容或完整 Responses 功能。

@@ -7,10 +7,10 @@ For Pi, use `api: "openai-responses"`. See the [Pi integration guide](docs/pi-ag
 and [models.json example](examples/pi/models.json). The pinned real-Pi CLI contract
 tests use simulated upstream protocol frames, not a live Grok Bot account.
 
-This repository is intentionally separate from Cursor2API. Grok Bot uses the
-Cursor/Grok Bot `aiserver.v1.InferenceService/Stream` path and Grok Bot session
-state. Cursor2API uses Cursor Dashboard keys and the Cursor SDK/AgentService
-path. Keeping them separate makes rollback and credential boundaries clear.
+This repository is intentionally separate from Cursor2API. Grok Bot uses
+desktop session state and Cursor/Grok Bot `aiserver` endpoints; Cursor2API uses
+Cursor Dashboard keys and the Cursor SDK/AgentService path. Keeping them
+separate makes rollback and credential boundaries clear.
 
 ## Current scope
 
@@ -53,6 +53,22 @@ gates before treating it as a complete daily agent backend.
 models are marked `catalog_entitled` / `experimental` until each selected model
 gets a controlled live smoke. The `default` / `Auto` entry is intentionally not
 exposed.
+
+## Upstream protocol modes
+
+`GROKBOT_UPSTREAM_MODE=inference` is the default and uses the original
+`aiserver.v1.InferenceService/Stream` implementation. It has local tool-loop
+contract coverage, but this machine's current desktop credentials received
+`unauthenticated` from that endpoint.
+
+`GROKBOT_UPSTREAM_MODE=ai-stream-chat` is a protocol-diagnostic experiment
+using the desktop bundle's `aiserver.v1.AiService/StreamChat` request and
+response schema. It only supports text chat: it deliberately rejects tool
+definitions and tool-call continuation rather than silently dropping them.
+On this machine it reached the authenticated upstream but received the Connect
+error `unimplemented` on September 22, 2026, so it is **not** a working
+fallback. Do not point Pi at this mode unless you are investigating a future
+desktop/upstream change.
 
 ## Run locally
 
@@ -131,6 +147,7 @@ Provider order:
 2. `GROKBOT_CREDENTIALS_FILE`
 3. `GROKBOT_CREDENTIALS_COMMAND`
 4. macOS Grok Bot Safe Storage, only on Darwin
+5. Linux Grok Bot Safe Storage + Secret Service, only on Linux
 
 `GROKBOT_CREDENTIALS_COMMAND` is the preferred Linux bootstrap/refresh boundary.
 It must be an absolute path, is executed without a shell on every request, and
@@ -144,11 +161,13 @@ The sidecar validates token shape/expiry and machine id, then discards the
 values after the request. It does not log command stdout/stderr, so helper errors
 must be monitored at the helper/runtime layer.
 
-For `.212` Linux deployment, first validate a Linux Grok Bot runtime such as
-`Nichokas/grokbot-linux-port` in an isolated directory. The important gate is not
-whether this Node service can run on Linux; it can. The gate is whether Linux can
-maintain Grok Bot access token, machine id, client headers, and refresh without
-manual token copying. Until that is verified, deploy only for controlled testing.
+For Linux desktop Grok Bot, the sidecar automatically reads
+`~/.config/Grok Bot/sand-secrets.json` and retrieves the matching `Grok Bot`
+Secret Service entry through `secret-tool`. It supports the desktop app's `v10`
+and `v11` safe-storage records and reads both locations on every request; it
+never writes credentials. Set `GROKBOT_LINUX_SECRETS_PATH` to use a separate
+desktop profile. If the graphical login keyring is unavailable to the service
+account, use `GROKBOT_CREDENTIALS_COMMAND` instead.
 
 ## Safety defaults
 

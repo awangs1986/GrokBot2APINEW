@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadCredentials, validateCredentials } from "../src/credentials.mjs";
+import crypto from "node:crypto";
+import { decodeLinuxSafeStorage, loadCredentials, validateCredentials } from "../src/credentials.mjs";
 
 test("loads credentials from an absolute command without shell parsing", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grokbot2api-credentials-"));
@@ -70,7 +71,34 @@ console.log("not json");
   }
 });
 
+test("decodes Grok Bot Linux v11 secure storage", () => {
+  const password = "linux-keyring-password";
+  const token = fakeJwt();
+  const credentials = decodeLinuxSafeStorage({
+    "cursor-machine-id": encryptLinuxSafeStorage("machine-id-1234567890", password, "v11"),
+    "cursor-accounts": JSON.stringify({
+      active: "account-1",
+      accounts: {
+        "account-1": {
+          "cursor-access-token": encryptLinuxSafeStorage(token, password, "v11")
+        }
+      }
+    })
+  }, password, { GROKBOT_CLIENT_VERSION: "0.30.0" });
+  validateCredentials(credentials);
+  assert.equal(credentials.source, "linux_safe_storage");
+  assert.equal(credentials.accessToken, token);
+  assert.equal(credentials.machineId, "machine-id-1234567890");
+  assert.equal(credentials.clientVersion, "0.30.0");
+});
+
 function fakeJwt() {
   const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
   return `header.${payload}.signature`;
+}
+
+function encryptLinuxSafeStorage(value, password, prefix) {
+  const key = crypto.pbkdf2Sync(password, "saltysalt", 1, 16, "sha1");
+  const cipher = crypto.createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 32));
+  return Buffer.concat([Buffer.from(prefix), cipher.update(value, "utf8"), cipher.final()]).toString("base64");
 }

@@ -12,6 +12,7 @@ import {
   ResponseSseWriter
 } from "./openai.mjs";
 import { modelList } from "./models.mjs";
+import { AiServiceStreamChatClient } from "./ai-service.mjs";
 import { GrokBotInferenceClient, usageFromState } from "./upstream.mjs";
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -26,11 +27,7 @@ export function createApp(config = {}) {
     maxBodyBytes: config.maxBodyBytes || maxBodyBytesFromEnv(process.env),
     rateLimitCooldownMs: config.rateLimitCooldownMs ?? rateLimitCooldownMsFromEnv(process.env),
     credentialProvider: config.credentialProvider || createCredentialProvider(process.env),
-    upstream: config.upstream || new GrokBotInferenceClient({
-      backend: process.env.GROKBOT_BACKEND,
-      upstreamModel: process.env.GROKBOT_UPSTREAM_MODEL || "grok-4.5",
-      timeoutMs: Number.parseInt(process.env.GROKBOT_UPSTREAM_TIMEOUT_MS || "", 10) || 90_000
-    }),
+    upstream: config.upstream || configuredUpstream(process.env),
     active: false,
     cooldownUntil: 0
   };
@@ -64,6 +61,22 @@ export function createApp(config = {}) {
       if (!res.destroyed && !res.writableEnded) jsonError(res, error);
     }
   };
+}
+
+export function configuredUpstream(env = process.env) {
+  const config = {
+    backend: env.GROKBOT_BACKEND,
+    upstreamModel: env.GROKBOT_UPSTREAM_MODEL || "grok-4.5",
+    timeoutMs: Number.parseInt(env.GROKBOT_UPSTREAM_TIMEOUT_MS || "", 10) || 90_000
+  };
+  const mode = (env.GROKBOT_UPSTREAM_MODE || "inference").trim().toLowerCase();
+  if (mode === "inference") return new GrokBotInferenceClient(config);
+  if (mode === "ai-stream-chat") return new AiServiceStreamChatClient(config);
+  throw new AppError(
+    "invalid_upstream_mode",
+    "GROKBOT_UPSTREAM_MODE must be 'inference' or 'ai-stream-chat'",
+    503
+  );
 }
 
 export function startServer(config = {}) {

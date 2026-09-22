@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 import { AppError } from "./errors.mjs";
 
 const MAC_SECRETS_PATH = path.join(os.homedir(), "Library/Application Support/Grok Bot/sand-secrets.json");
+const LINUX_SECRETS_PATH = path.join(os.homedir(), ".config/Grok Bot/sand-secrets.json");
+const LINUX_SAFE_STORAGE_APPLICATION = "Grok Bot";
 
 export function createCredentialProvider(env = process.env) {
   return {
@@ -37,6 +39,7 @@ export function loadCredentials(env = process.env) {
   }
   if (env.GROKBOT_CREDENTIALS_COMMAND) return loadCommandCredentials(env);
   if (process.platform === "darwin") return loadMacSafeStorage(env);
+  if (process.platform === "linux") return loadLinuxSafeStorage(env);
   throw new AppError("credentials_not_configured", "Grok Bot credentials are not configured for this host", 503);
 }
 
@@ -89,6 +92,55 @@ function loadMacSafeStorage(env = process.env) {
     machineId: decryptSafeStorage(store["cursor-machine-id"], keychain.stdout.trimEnd()),
     clientVersion: env.GROKBOT_CLIENT_VERSION || "0.24.0"
   };
+}
+
+function loadLinuxSafeStorage(env = process.env) {
+  const secretsPath = env.GROKBOT_LINUX_SECRETS_PATH || LINUX_SECRETS_PATH;
+  if (!path.isAbsolute(secretsPath)) {
+    throw new AppError("linux_secrets_path_not_absolute", "GROKBOT_LINUX_SECRETS_PATH must be an absolute path", 503);
+  }
+  let store;
+  try {
+    store = JSON.parse(fs.readFileSync(secretsPath, "utf8"));
+  } catch {
+    throw new AppError("linux_secrets_read_failed", "Could not read Grok Bot Linux secure storage", 503);
+  }
+  const keyring = spawnSync(
+    "secret-tool",
+    ["lookup", "application", LINUX_SAFE_STORAGE_APPLICATION],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, maxBuffer: 64 * 1024 }
+  );
+  if (keyring.status !== 0 || !keyring.stdout) {
+    throw new AppError("linux_keyring_read_failed", "Could not read Grok Bot Linux keyring", 503);
+  }
+  return decodeLinuxSafeStorage(store, keyring.stdout.trimEnd(), env);
+}
+
+export function decodeLinuxSafeStorage(store, keyringPassword, env = process.env) {
+  try {
+    const accounts = JSON.parse(stringField(store, "cursor-accounts"));
+    const active = stringField(accounts, "active");
+    const account = accounts.accounts?.[active];
+    if (!account || typeof account !== "object") throw new Error("active account missing");
+    return {
+      source: "linux_safe_storage",
+      accessToken: decryptLinuxSafeStorage(stringField(account, "cursor-access-token"), keyringPassword),
+      machineId: decryptLinuxSafeStorage(stringField(store, "cursor-machine-id"), keyringPassword),
+      clientVersion: env.GROKBOT_CLIENT_VERSION || "0.27.0"
+    };
+  } catch {
+    throw new AppError("linux_secrets_invalid", "Grok Bot Linux secure storage is invalid or unsupported", 503);
+  }
+}
+
+function decryptLinuxSafeStorage(ciphertextBase64, keyringPassword) {
+  const encrypted = Buffer.from(ciphertextBase64 || "", "base64");
+  const prefix = encrypted.subarray(0, 3).toString("ascii");
+  const password = prefix === "v10" ? "peanuts" : prefix === "v11" ? keyringPassword : "";
+  if (!password || encrypted.length <= 3) throw new Error("unsupported safe storage format");
+  const key = crypto.pbkdf2Sync(password, "saltysalt", 1, 16, "sha1");
+  const decipher = crypto.createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, 32));
+  return Buffer.concat([decipher.update(encrypted.subarray(3)), decipher.final()]).toString("utf8");
 }
 
 export function validateCredentials(credentials, now = Date.now()) {
