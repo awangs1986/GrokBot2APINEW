@@ -1,7 +1,11 @@
 # GrokBot2API
 
 Private sidecar that translates a Grok Bot inference entitlement into a
-Grok CLI compatible Responses API.
+Grok CLI / Pi Coding Agent compatible Responses API.
+
+For Pi, use `api: "openai-responses"`. See the [Pi integration guide](docs/pi-agent.md)
+and [models.json example](examples/pi/models.json). The pinned real-Pi CLI contract
+tests use simulated upstream protocol frames, not a live Grok Bot account.
 
 This repository is intentionally separate from Cursor2API. Grok Bot uses the
 Cursor/Grok Bot `aiserver.v1.InferenceService/Stream` path and Grok Bot session
@@ -38,9 +42,11 @@ Grok CLI 1.0.5 custom-model contract was verified locally: with
   development
 
 It now claims Grok CLI text plus function-tool round-trip compatibility through
-local fake-upstream tests. Cancellation, disconnect semantics, rich tool result
-content, and long-running Linux credential refresh remain follow-up gates before
-treating it as a complete daily Grok CLI backend.
+local fake-upstream tests. Pi CLI 0.87.0 text/function-tool round trips and error handling are also covered
+by real-CLI tests with simulated upstream frames. Downstream disconnect now
+propagates cancellation to the HTTPS upstream. Rich tool result content, live
+upstream validation, and long-running Linux credential refresh remain follow-up
+gates before treating it as a complete daily agent backend.
 
 `/v1/models` includes the 34 named models observed from the current Grok Bot
 `USER_AVAILABLE` catalog. `grok-4.5` is marked `verified`; the other catalog
@@ -51,9 +57,14 @@ exposed.
 ## Run locally
 
 ```sh
-cp .env.example .env
-GROKBOT2API_KEY=local-dev-key node bin/grokbot2api.mjs
+cp -n .env.example .env
+# Edit .env: set GROKBOT2API_KEY and configure the upstream credentials.
+node --env-file=.env bin/grokbot2api.mjs
 ```
+
+`--env-file` requires Node >=20.6. The service does not load `.env` automatically;
+you can instead inject environment variables and run `npm start`. The curl example
+below assumes you configured the downstream key as `local-dev-key`.
 
 The service defaults to `127.0.0.1:8793`. Non-loopback bind is refused unless
 `GROKBOT_ALLOW_PRIVATE_BIND=1` is set.
@@ -153,7 +164,16 @@ manual token copying. Until that is verified, deploy only for controlled testing
 
 ## Verification
 
+The development/contract-test dependency (Pi CLI 0.87.0) requires Node >=22.19.0.
+The sidecar itself still has no runtime npm dependencies.
+
 ```sh
+npm ci
 npm run check
 npm test
+npm run test:pi
 ```
+
+Pi tests run the real pinned CLI with isolated configuration and a simulated
+Grok Bot transport. Passing them does not establish live account entitlement or
+current upstream protocol compatibility. See the Pi guide for the live smoke gate.

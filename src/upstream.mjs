@@ -24,8 +24,9 @@ export class GrokBotInferenceClient {
     const state = emptyDecodeState();
     const body = buildUpstreamRequestBody(request, this.upstreamModel);
     const upstreamRequestId = request.requestId || crypto.randomUUID();
-    const response = await this.open(credentials, body, upstreamRequestId);
+    const response = await this.open(credentials, body, upstreamRequestId, request.signal);
     if (response.status !== 200) {
+      response.body.destroy();
       const meta = {
         upstreamErrorSource: "http",
         upstreamHttpStatus: response.status,
@@ -46,6 +47,7 @@ export class GrokBotInferenceClient {
       receivedBytes += chunk.length;
       if (receivedBytes > this.maxResponseBytes) throw new AppError("upstream_response_too_large", "Upstream response too large", 502);
       for (const frame of decoder.push(chunk)) {
+        if (state.endFrames > 0) throw new AppError("upstream_frame_after_terminal", "Grok Bot sent data after its terminal frame", 502);
         const events = applyConnectFrame(frame, state);
         for (const event of events) yield event;
       }
@@ -63,13 +65,17 @@ export class GrokBotInferenceClient {
       }
       throw new AppError(String(first.code || "upstream_stream_error"), first.message || "Grok Bot upstream stream error", 502, "api_error", meta);
     }
+    if (state.endFrames !== 1) {
+      throw new AppError("upstream_missing_terminal", "Grok Bot upstream did not return exactly one terminal frame", 502);
+    }
     yield { type: "done", state };
   }
 
-  open(credentials, body, requestId = crypto.randomUUID()) {
+  open(credentials, body, requestId = crypto.randomUUID(), signal) {
     return new Promise((resolve, reject) => {
       const request = https.request(this.backend, {
         method: "POST",
+        signal,
         headers: {
           "content-type": "application/connect+proto",
           "connect-protocol-version": "1",

@@ -672,3 +672,44 @@ async function captureConsoleError(logs, fn) {
 function close(server) {
   return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
+
+test("client disconnect cancels upstream and releases the single-request slot", { timeout: 5000 }, async () => {
+  let aborted;
+  const didAbort = new Promise((resolve) => { aborted = resolve; });
+  let calls = 0;
+  const server = await listen({ upstream: {
+    async *stream(request) {
+      calls += 1;
+      if (calls === 1) {
+        const abort = new Promise((_, reject) => {
+          request.signal.addEventListener("abort", () => { aborted(); reject(request.signal.reason); }, { once: true });
+        });
+        yield { type: "text", text: "working" };
+        await abort;
+      }
+      yield { type: "text", text: "next request works" };
+      yield { type: "done", state: fakeState("next request works") };
+    }
+  } });
+  try {
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/responses`, {
+      method: "POST", headers: authHeaders(), signal: controller.signal,
+      body: JSON.stringify({ model: "grok-4.5", input: "hi", stream: true })
+    });
+    const reader = response.body.getReader();
+    await reader.read();
+    controller.abort();
+    await reader.read().catch(() => {});
+    await didAbort;
+    await new Promise((resolve) => setImmediate(resolve));
+    const next = await request(server, "POST", "/v1/responses", {
+      model: "grok-4.5", input: "next", stream: false
+    }, authHeaders());
+    assert.equal(next.status, 200);
+    assert.equal(next.body.output[0].content[0].text, "next request works");
+  } finally {
+    server.closeAllConnections();
+    await close(server);
+  }
+});

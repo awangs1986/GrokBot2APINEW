@@ -145,28 +145,32 @@ function responseTools(tools) {
   });
 }
 
+// Recurse only through schema locations, not through property names or literal
+// enum/const values. Keep definitions so local $ref targets remain valid.
 export function sanitizeJsonSchema(schema) {
+  if (typeof schema === "boolean") return schema;
   if (!isRecord(schema)) return {};
   const out = {};
+  const maps = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"];
+  const singles = ["items", "additionalItems", "contains", "not", "if", "then", "else", "propertyNames", "unevaluatedProperties", "unevaluatedItems"];
+  const arrays = ["allOf", "anyOf", "oneOf", "prefixItems"];
   for (const [key, value] of Object.entries(schema)) {
-    if (["$schema", "default", "definitions", "markdownDescription", "additionalProperties"].includes(key)) continue;
+    if (["$schema", "default", "markdownDescription", "additionalProperties"].includes(key)) continue;
     if (key === "items" && Array.isArray(value)) {
-      out.prefixItems = value.map(sanitizeSchemaValue);
-      continue;
+      out.prefixItems = value.map(sanitizeJsonSchema);
+    } else if (key === "additionalItems" && Array.isArray(schema.items)) {
+      out.items = sanitizeJsonSchema(value);
+    } else if (maps.includes(key) && isRecord(value)) {
+      out[key] = Object.fromEntries(Object.entries(value).map(([name, child]) => [name, sanitizeJsonSchema(child)]));
+    } else if (singles.includes(key)) {
+      out[key] = sanitizeJsonSchema(value);
+    } else if (arrays.includes(key) && Array.isArray(value)) {
+      out[key] = value.map(sanitizeJsonSchema);
+    } else {
+      out[key] = value;
     }
-    if (key === "additionalItems" && Array.isArray(schema.items)) {
-      out.items = sanitizeSchemaValue(value);
-      continue;
-    }
-    out[key] = sanitizeSchemaValue(value);
   }
   return out;
-}
-
-function sanitizeSchemaValue(value) {
-  if (Array.isArray(value)) return value.map(sanitizeSchemaValue);
-  if (isRecord(value)) return sanitizeJsonSchema(value);
-  return value;
 }
 
 export class ResponseSseWriter {
@@ -176,12 +180,12 @@ export class ResponseSseWriter {
     this.created = Math.floor(Date.now() / 1000);
     this.model = model;
     this.sequence = 0;
-    this.textStarted = false;
+    this.activeText = null;
     this.closed = false;
     this.text = "";
     this.usage = null;
     this.outputCount = 0;
-    this.textOutputIndex = null;
+    this.toolCallsByIndex = new Map();
     this.toolCalls = new Map();
     this.output = [];
   }
@@ -202,10 +206,11 @@ export class ResponseSseWriter {
     if (!text) return;
     this.text += text;
     this.ensureTextStarted();
+    this.activeText.text += text;
     this.event("response.output_text.delta", {
       type: "response.output_text.delta",
-      item_id: messageItemId(this.id),
-      output_index: this.textOutputIndex,
+      item_id: this.activeText.id,
+      output_index: this.activeText.index,
       content_index: 0,
       delta: text
     });
@@ -253,7 +258,11 @@ export class ResponseSseWriter {
 
   complete(usage) {
     this.usage = usage;
-    if (this.textStarted || this.output.length === 0) this.completeTextItem();
+    if ([...this.toolCalls.values()].some((call) => !call.completed)) {
+      throw new AppError("upstream_incomplete_tool_call", "Grok Bot returned an unfinished tool call", 502);
+    }
+    if (this.outputCount === 0) this.ensureTextStarted();
+    this.completeTextItem();
     const output = this.output.filter(Boolean);
     this.event("response.completed", {
       type: "response.completed",
@@ -266,55 +275,51 @@ export class ResponseSseWriter {
   }
 
   ensureTextStarted() {
-    if (this.textStarted) return;
-    this.textStarted = true;
-    this.textOutputIndex = this.outputCount++;
+    if (this.activeText) return;
+    const index = this.outputCount++;
+    const id = `msg_${this.id.slice(5)}_${index}`;
+    this.activeText = { id, index, text: "" };
     this.event("response.output_item.added", {
       type: "response.output_item.added",
-      output_index: this.textOutputIndex,
-      item: messageItem(this.id, "in_progress", [])
+      output_index: index,
+      item: { id, type: "message", status: "in_progress", role: "assistant", content: [] }
     });
     this.event("response.content_part.added", {
       type: "response.content_part.added",
-      item_id: messageItemId(this.id),
-      output_index: this.textOutputIndex,
+      item_id: id,
+      output_index: index,
       content_index: 0,
       part: { type: "output_text", text: "", annotations: [] }
     });
   }
 
   completeTextItem() {
-    this.ensureTextStarted();
-    const part = { type: "output_text", text: this.text, annotations: [] };
-    const item = messageItem(this.id, "completed", [part]);
-    this.output[this.textOutputIndex] = item;
+    if (!this.activeText) return;
+    const { id, index, text } = this.activeText;
+    const part = { type: "output_text", text, annotations: [] };
+    const item = { id, type: "message", status: "completed", role: "assistant", content: [part] };
+    this.output[index] = item;
     this.event("response.output_text.done", {
-      type: "response.output_text.done",
-      item_id: messageItemId(this.id),
-      output_index: this.textOutputIndex,
-      content_index: 0,
-      text: this.text
+      type: "response.output_text.done", item_id: id, output_index: index, content_index: 0, text
     });
     this.event("response.content_part.done", {
-      type: "response.content_part.done",
-      item_id: messageItemId(this.id),
-      output_index: this.textOutputIndex,
-      content_index: 0,
-      part
+      type: "response.content_part.done", item_id: id, output_index: index, content_index: 0, part
     });
     this.event("response.output_item.done", {
-      type: "response.output_item.done",
-      output_index: this.textOutputIndex,
-      item
+      type: "response.output_item.done", output_index: index, item
     });
+    this.activeText = null;
   }
 
   ensureToolCall(part) {
-    const callId = stringFrom(part.id) || `call_${this.id.slice(5)}_${this.toolCalls.size}`;
-    const existing = this.toolCalls.get(callId);
+    const hasIndex = Number.isInteger(part.index) && part.index >= 0;
+    const existing = part.id ? this.toolCalls.get(part.id) : hasIndex ? this.toolCallsByIndex.get(part.index) : null;
     if (existing) return existing;
-    const outputIndex = Number.isInteger(part.index) && part.index >= 0 ? part.index : this.outputCount;
-    this.outputCount = Math.max(this.outputCount, outputIndex + 1);
+    this.completeTextItem();
+    const callId = stringFrom(part.id) || `call_${this.id.slice(5)}_${this.toolCalls.size}`;
+    // Upstream index identifies a tool, not a Responses output item. Text also
+    // consumes output indexes, so allocate our own contiguous output indexes.
+    const outputIndex = this.outputCount++;
     const item = {
       id: `fc_${crypto.randomUUID().replaceAll("-", "")}`,
       type: "function_call",
@@ -325,6 +330,7 @@ export class ResponseSseWriter {
     };
     const call = { item, outputIndex, arguments: "", completed: false };
     this.toolCalls.set(callId, call);
+    if (hasIndex) this.toolCallsByIndex.set(part.index, call);
     this.output[outputIndex] = item;
     this.event("response.output_item.added", {
       type: "response.output_item.added",
@@ -338,6 +344,10 @@ export class ResponseSseWriter {
     const appError = errorFromUnknown(error, "upstream_error");
     this.event("error", {
       type: "error",
+      code: appError.code,
+      message: appError.message,
+      param: null,
+      // Retain the legacy nested shape for existing Grok CLI clients.
       error: {
         message: appError.message,
         type: appError.type,
@@ -366,9 +376,10 @@ export class ResponseSseWriter {
 export function nonStreamingResponse(model, text, usage, toolCalls = []) {
   const id = `resp_${crypto.randomUUID().replaceAll("-", "")}`;
   const created = Math.floor(Date.now() / 1000);
-  const output = toolCalls.length > 0
-    ? toolCalls.map((call) => functionCallItem(call, "completed"))
-    : [messageItem(id, "completed", [{ type: "output_text", text, annotations: [] }])];
+  const output = [
+    ...(text || toolCalls.length === 0 ? [messageItem(id, "completed", [{ type: "output_text", text, annotations: [] }])] : []),
+    ...toolCalls.map((call) => functionCallItem(call, "completed"))
+  ];
   return {
     ...responseBase(id, created, model, "completed", null, usage),
     output

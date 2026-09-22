@@ -61,7 +61,7 @@ export function createApp(config = {}) {
       }
       jsonError(res, new AppError("not_found", "Not found", 404, "invalid_request_error"));
     } catch (error) {
-      jsonError(res, error);
+      if (!res.destroyed && !res.writableEnded) jsonError(res, error);
     }
   };
 }
@@ -85,26 +85,33 @@ async function handleResponses(req, res, runtime) {
     throw new AppError("concurrency_limited", "Only one Grok Bot request may run at a time", 429, "rate_limit_error");
   }
   runtime.active = true;
+  const controller = new AbortController();
+  const onClose = () => { if (!res.writableEnded) controller.abort(); };
+  res.once("close", onClose);
   const startedAt = Date.now();
   let request = null;
   try {
     const body = await readJsonBody(req, runtime.maxBodyBytes);
     request = normalizeResponsesRequest(body.value, { defaultModel: runtime.publicModel });
+    request.signal = controller.signal;
     request.requestId = request.requestId || crypto.randomUUID();
     request.requestBodyBytes = body.bytes;
     request.startedAt = startedAt;
     const credentials = await runtime.credentialProvider.get();
+    controller.signal.throwIfAborted();
     if (request.stream) {
       await streamResponse(res, runtime, request, credentials);
     } else {
       await jsonResponse(res, runtime, request, credentials);
     }
   } catch (error) {
+    if (controller.signal.aborted) return;
     const appError = appErrorForClient(error);
     applyRateLimitCooldown(runtime, appError);
     if (request) logRequestError(request, appError, startedAt);
     throw appError;
   } finally {
+    res.off("close", onClose);
     runtime.active = false;
   }
 }
@@ -123,6 +130,7 @@ async function streamResponse(res, runtime, request, credentials) {
     if (!finalState) throw new AppError("upstream_missing_terminal", "Grok Bot upstream did not return a terminal frame", 502);
     writer.complete(usageFromState(finalState));
   } catch (error) {
+    if (request.signal?.aborted) return;
     const appError = appErrorForClient(error);
     applyRateLimitCooldown(runtime, appError);
     logStreamError(request, appError);

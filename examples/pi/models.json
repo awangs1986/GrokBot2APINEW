@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "grokbot": {
+      "baseUrl": "http://127.0.0.1:8793/v1",
+      "api": "openai-responses",
+      "apiKey": "$GROKBOT2API_KEY",
+      "models": [
+        {
+          "id": "grok-4.5",
+          "name": "Grok Bot (Responses sidecar)",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 256000,
+          "maxTokens": 8192,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}
