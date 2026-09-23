@@ -42,6 +42,16 @@ GrokBot transcript tool-call/result/approval protocol is verified. Therefore a
 successful metadata probe or offline Pi contract test is not evidence that
 real Pi tools are connected.
 
+On September 23, 2026, a controlled no-tool smoke was attempted on a separate
+loopback port with the user-supplied test agent ID. The request reached the
+new `GrokBotService` path, but both attempts timed out with
+`grokbot_response_timeout` after roughly 92 seconds. A read-only follow-up
+showed that the current signed-in account exposes three agents, but the
+supplied ID is not among them; transcript metadata itself was readable. Treat
+this as an agent-selection/account mismatch, not as proof that the transport
+or Pi bridge is broken. Pi's default retry caused a second delivery attempt,
+so future live smoke runs must disable retry.
+
 ## What changed, currently uncommitted
 
 Do not overwrite the existing uncommitted work. The current worktree contains:
@@ -120,6 +130,10 @@ GROKBOT_AGENT_ID=<user-authorized-test-agent-id>
 node --env-file=.env bin/grokbot2api.mjs
 pi --provider grokbot --model grok-4.5 --thinking off --no-tools -p "只回复 OK"
 ```
+
+Before this smoke, ensure the ID comes from the same currently signed-in
+desktop account and set Pi retry to disabled so one prompt produces one
+upstream delivery attempt.
 
 The smoke report must contain only delivery status, whether the nonce echo and
 assistant reply arrived, elapsed time, and reply size. Do not print the agent
