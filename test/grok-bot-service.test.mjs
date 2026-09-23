@@ -8,6 +8,7 @@ import {
   buildListGrokBotTranscriptEntriesRequest,
   buildSendGrokBotUserMessageRequest,
   decodeGrokBotSendStatusResponse,
+  decodeListAgentsResponse,
   decodeListGrokBotTranscriptEntriesResponse,
   decodeSendGrokBotUserMessageResponse,
   GrokBotServiceClient,
@@ -68,6 +69,26 @@ test("decodes send delivery and send status without exposing response text", () 
   });
 });
 
+test("decodes the canonical GrokBot agent id instead of the display id", () => {
+  const response = decodeListAgentsResponse(protoMessage([
+    protoField(1, 2, protoMessage([
+      protoField(1, 2, "display"),
+      protoField(2, 2, "legacy-agent-id"),
+      protoField(3, 2, "Test Bot"),
+      protoField(12, 2, "canonical-agent-id"),
+      protoField(13, 2, "box"),
+      protoField(14, 2, "owner")
+    ]))
+  ]));
+  assert.deepEqual(response, [{
+    id: "canonical-agent-id",
+    legacyAgentId: "legacy-agent-id",
+    name: "Test Bot",
+    harness: "box",
+    role: "owner"
+  }]);
+});
+
 test("uses the current unary protobuf route, not the retired Connect stream envelope", async (t) => {
   let observed;
   t.mock.method(https, "request", (url, options, callback) => {
@@ -101,6 +122,30 @@ test("uses an exact prompt nonce and a completed assistant transcript row", () =
     isStreaming: false
   });
   assert.equal(newestAssistantText(entries.slice(1), baseline, "nonce-test"), null);
+});
+
+test("recognizes completed send-message text linked by the user request id", () => {
+  const baseline = { generation: 3, entryIds: new Set(), maxUpdatedSeq: 5n, maxSeq: 5n };
+  const entries = [
+    transcriptEntry({
+      seq: 6,
+      updatedSeq: 6,
+      entryId: "user",
+      body: { kind: "message", role: "user", clientNonce: "nonce-test", requestId: "request-test", content: "fake" }
+    }),
+    transcriptEntry({
+      seq: 7,
+      updatedSeq: 7,
+      entryId: "send-message",
+      body: { kind: "send-message", requestId: "request-test", message: { type: "text", content: "fake result" } }
+    })
+  ];
+  assert.deepEqual(newestAssistantText(entries, baseline, "nonce-test"), {
+    key: "send-message:7",
+    updatedSeq: 7n,
+    text: "fake result",
+    isStreaming: undefined
+  });
 });
 
 test("does not return an assistant row before the matching sent user row", () => {

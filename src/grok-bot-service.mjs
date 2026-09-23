@@ -227,7 +227,11 @@ export function decodeListAgentsResponse(bytes) {
     .map((field) => {
       const values = parseProto(field.value);
       return {
-        id: textField(values, 1),
+        // The desktop client sends the canonical agent_id (field 12) to
+        // message/transcript RPCs. Field 1 is the server/display id.
+        id: textField(values, 12) || textField(values, 2) || textField(values, 1),
+        legacyAgentId: textField(values, 2),
+        name: textField(values, 3),
         harness: textField(values, 13),
         role: textField(values, 14)
       };
@@ -300,12 +304,13 @@ export function newestAssistantText(entries, baseline, messageId = "") {
     if (!isNewTranscriptEntry(entry, baseline) || !entry.body) continue;
     if (sentEntrySeq !== null && entry.seq <= sentEntrySeq) continue;
     const value = parseTranscriptBody(entry.body);
-    if (!isAssistantTextEntry(value)) continue;
+    const textEntry = assistantTextEntry(value);
+    if (!textEntry) continue;
     candidates.push({
       key: `${entry.entryId || entry.seq}:${entry.updatedSeq}`,
       updatedSeq: entry.updatedSeq,
-      text: value.content,
-      isStreaming: value.isStreaming
+      text: textEntry.text,
+      isStreaming: textEntry.isStreaming
     });
   }
   candidates.sort((left, right) => compareBigInt(left.updatedSeq, right.updatedSeq));
@@ -362,12 +367,27 @@ function parseTranscriptBody(body) {
   }
 }
 
-function isAssistantTextEntry(value) {
-  return value?.kind === "message" &&
+function assistantTextEntry(value) {
+  if (
+    value?.kind === "message" &&
     value.role === "assistant" &&
     typeof value.content === "string" &&
     value.fromUser == null &&
-    value.channel == null;
+    value.channel == null
+  ) {
+    return { text: value.content, isStreaming: value.isStreaming };
+  }
+  // Current desktop 0.30.0 stores the completed assistant text as a
+  // send-message transcript row. Its requestId matches the echoed user row,
+  // while the text lives under message.content.
+  if (
+    value?.kind === "send-message" &&
+    value.message?.type === "text" &&
+    typeof value.message.content === "string"
+  ) {
+    return { text: value.message.content, isStreaming: value.message.isStreaming };
+  }
+  return null;
 }
 
 function serviceBackend(value) {

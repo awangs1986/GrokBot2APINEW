@@ -42,14 +42,20 @@ GrokBot transcript tool-call/result/approval protocol is verified. Therefore a
 successful metadata probe or offline Pi contract test is not evidence that
 real Pi tools are connected.
 
-On September 23, 2026, a controlled no-tool smoke was attempted on a separate
-loopback port with the user-supplied test agent ID. The request reached the
-new `GrokBotService` path, but both attempts timed out with
-`grokbot_response_timeout` after roughly 92 seconds. A read-only follow-up
-showed that the current signed-in account exposes three agents, but the
-supplied ID is not among them; transcript metadata itself was readable. Treat
-this as an agent-selection/account mismatch, not as proof that the transport
-or Pi bridge is broken. Pi's default retry caused a second delivery attempt,
+On September 23, 2026, a controlled no-tool smoke reached the new
+`GrokBotService` path but initially timed out with `grokbot_response_timeout`.
+The timeout was caused by two decoder assumptions, not by an invalid agent:
+
+- `GrokBotAgent.agent_id` is protobuf field 12 (field 2 is the legacy ID;
+  field 1 is the server/display ID).
+- In the current desktop transcript, completed assistant text is a
+  `kind:"send-message"` row whose `message.type` is `text` and whose reply is
+  in `message.content`. It is paired with the user row by `requestId`; the
+  user row still carries the exact `clientNonce`.
+
+The live transcript contains these rows and the fixed nonce correlator now
+replays the latest real reply successfully without sending a new message.
+Pi's default retry caused a second delivery attempt during the failed smoke,
 so future live smoke runs must disable retry.
 
 ## What changed, currently uncommitted
@@ -63,7 +69,8 @@ Do not overwrite the existing uncommitted work. The current worktree contains:
   It implements the statically verified `GetChatRequest` /
   `StreamChatResponse` protobuf shape and rejects tool requests explicitly.
 - `src/grok-bot-service.mjs`: the current desktop `GrokBotService` unary
-  transport and nonce-correlated durable transcript reader. Text only.
+  transport and nonce-correlated durable transcript reader. It accepts both
+  legacy assistant message rows and current completed `send-message` text rows.
 - `src/server.mjs`: selects the diagnostic transport only if
   `GROKBOT_UPSTREAM_MODE=ai-stream-chat` or
   `GROKBOT_UPSTREAM_MODE=grokbot-service`; default remains `inference`.
@@ -94,11 +101,12 @@ npm run test:pi
 git diff --check
 ```
 
-Most recent result on September 23, 2026: `npm test` had 61 passing tests and
+Most recent result on September 23, 2026: `npm test` had 63 passing tests and
 2 pre-existing skipped real-Grok-CLI tests; `npm run test:pi` had 3 passing
 tests; `npm run check` and `git diff --check` passed. The ordinary sandbox
 cannot bind loopback test ports, so the full suite was run with local test
-permission. No live Grok Bot message was sent.
+permission. The live transcript replay was read-only; no new Grok Bot message
+was sent during the final verification.
 
 ## Pi notes
 
