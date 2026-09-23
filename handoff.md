@@ -11,23 +11,38 @@ Base commit: `3333634` (`feat: add Pi agent Responses integration and contract t
 
 ## Current result
 
-The local HTTP sidecar, Pi provider configuration, and Linux desktop credential
-reader are working independently. The live upstream protocol is the blocker:
+The project now has a third, explicitly opt-in transport for the current Grok
+Bot desktop release (`0.30.0`):
 
-- The original client in `src/upstream.mjs` calls
-  `aiserver.v1.InferenceService/Stream`; the live upstream returns
-  `unauthenticated`.
-- The experimental text-only client in `src/ai-service.mjs` calls
-  `aiserver.v1.AiService/StreamChat`; it reaches the authenticated upstream but
-  ends with Connect error `unimplemented`.
-- A one-off probe of `AiService/StreamChatTryReallyHard` also ended with
-  `unimplemented`.
+- `src/upstream.mjs` remains the original `aiserver.v1.InferenceService/Stream`
+  implementation. On this machine its live response was `unauthenticated`.
+- `src/ai-service.mjs` remains a text-only diagnostic client for
+  `aiserver.v1.AiService/StreamChat`. It reached the authenticated upstream but
+  returned Connect `unimplemented` on September 22, 2026.
+- `src/grok-bot-service.mjs` implements the current unary
+  `aiserver.v1.GrokBotService` route used by the desktop app:
+  `SendGrokBotUserMessage`, `GetGrokBotSendStatus`, and
+  `ListGrokBotTranscriptEntries`. A metadata-only probe returned HTTP 200 with
+  the desktop session credentials.
 
-Therefore Pi cannot yet make a successful real text request, and Pi tools
-cannot be considered connected. The temporary probe services were stopped; the
-existing local sidecar on its normal port was not restarted or reconfigured.
+The new `GROKBOT_UPSTREAM_MODE=grokbot-service` path is text-only and requires
+an explicitly supplied `GROKBOT_AGENT_ID`. It snapshots the transcript, sends a
+nonce-tagged user message, waits for the matching user echo, and returns only a
+newer assistant message. It never auto-selects a Bot and does not log tokens,
+agent IDs, prompts, transcript bodies, or replies.
 
-## What changed, uncommitted
+The reference project `cniu6/grok_bot_2api_temp` is useful evidence for the
+overall product shape—an OpenAI-compatible sidecar in front of a Bot session—
+but its old `desktop access token -> InferenceService/Stream` transport is not
+the current working direction on this machine. We keep its gateway concept and
+replace only the upstream adapter.
+
+Pi tool calls are intentionally rejected in `grokbot-service` until the
+GrokBot transcript tool-call/result/approval protocol is verified. Therefore a
+successful metadata probe or offline Pi contract test is not evidence that
+real Pi tools are connected.
+
+## What changed, currently uncommitted
 
 Do not overwrite the existing uncommitted work. The current worktree contains:
 
@@ -37,12 +52,18 @@ Do not overwrite the existing uncommitted work. The current worktree contains:
 - `src/ai-service.mjs`: an explicit `ai-stream-chat` diagnostic transport.
   It implements the statically verified `GetChatRequest` /
   `StreamChatResponse` protobuf shape and rejects tool requests explicitly.
+- `src/grok-bot-service.mjs`: the current desktop `GrokBotService` unary
+  transport and nonce-correlated durable transcript reader. Text only.
 - `src/server.mjs`: selects the diagnostic transport only if
-  `GROKBOT_UPSTREAM_MODE=ai-stream-chat`; default remains `inference`.
+  `GROKBOT_UPSTREAM_MODE=ai-stream-chat` or
+  `GROKBOT_UPSTREAM_MODE=grokbot-service`; default remains `inference`.
 - `test/ai-service.test.mjs`: framing, protobuf encoding, text decoding,
   tool-rejection, and mode-selection coverage.
+- `test/grok-bot-service.test.mjs`: protobuf request/response coverage,
+  transcript nonce correlation, stable legacy rows, generation checks,
+  explicit-agent enforcement, and tool rejection.
 - `docs/pi-agent.md` and `.env.example`: document the Linux credential reader
-  and that `ai-stream-chat` is a failing diagnostic mode, not a workaround.
+  and both diagnostic/current service modes.
 
 Review the diff rather than duplicating it:
 
@@ -59,11 +80,15 @@ Run from the repository root:
 ```sh
 npm run check
 npm test
+npm run test:pi
 git diff --check
 ```
 
-Most recent result: 49 passing tests, 2 pre-existing skipped real-Grok-CLI
-tests, no diff whitespace errors.
+Most recent result on September 23, 2026: `npm test` had 61 passing tests and
+2 pre-existing skipped real-Grok-CLI tests; `npm run test:pi` had 3 passing
+tests; `npm run check` and `git diff --check` passed. The ordinary sandbox
+cannot bind loopback test ports, so the full suite was run with local test
+permission. No live Grok Bot message was sent.
 
 ## Pi notes
 
@@ -86,18 +111,24 @@ tests, no diff whitespace errors.
 
 ## Suggested next step
 
-Find the Grok Bot desktop client's actual current inference transport before
-adding another sidecar mode. Static inspection shows newer unified chat and
-remote-agent protobuf wrappers, but the two simple `AiService` text methods are
-not live on this account. Earlier metadata-only network observation did not
-capture a new request when the user sent three desktop messages, suggesting a
-pre-existing long-lived connection or another isolated transport.
+Perform one controlled live text smoke only after the user supplies a
+throwaway/test Bot's agent ID or explicitly authorizes a test Bot:
 
-Build a narrow, secret-safe feedback loop first: capture only endpoint,
-method/service name, status, frame sizes, and timing from the desktop client's
-actual chat transport. Do not capture headers or body content. Once a concrete
-live RPC is found, add a dedicated client with a fake-upstream regression test,
-then do one non-tool live smoke before attempting Pi tools.
+```sh
+GROKBOT_UPSTREAM_MODE=grokbot-service
+GROKBOT_AGENT_ID=<user-authorized-test-agent-id>
+node --env-file=.env bin/grokbot2api.mjs
+pi --provider grokbot --model grok-4.5 --thinking off --no-tools -p "只回复 OK"
+```
+
+The smoke report must contain only delivery status, whether the nonce echo and
+assistant reply arrived, elapsed time, and reply size. Do not print the agent
+ID, prompt, reply, transcript, authorization header, or any token.
+
+If text succeeds, statically and then safely inspect the Grok Bot transcript
+tool-call/result/approval entries. Add a separate fake-upstream regression
+test for each discovered entry before enabling any Pi tool. Do not silently
+drop tool definitions or pretend the old `InferenceService` path is valid.
 
 ## Suggested skills
 

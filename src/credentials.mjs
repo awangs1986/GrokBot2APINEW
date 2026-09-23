@@ -25,7 +25,7 @@ export function loadCredentials(env = process.env) {
       source: "env",
       accessToken: env.GROKBOT_ACCESS_TOKEN,
       machineId: env.GROKBOT_MACHINE_ID,
-      clientVersion: env.GROKBOT_CLIENT_VERSION || "0.27.0"
+      clientVersion: env.GROKBOT_CLIENT_VERSION || "0.30.0"
     };
   }
   if (env.GROKBOT_CREDENTIALS_FILE) {
@@ -34,7 +34,7 @@ export function loadCredentials(env = process.env) {
       source: "file",
       accessToken: stringField(parsed, "accessToken"),
       machineId: stringField(parsed, "machineId"),
-      clientVersion: stringField(parsed, "clientVersion") || env.GROKBOT_CLIENT_VERSION || "0.27.0"
+      clientVersion: stringField(parsed, "clientVersion") || env.GROKBOT_CLIENT_VERSION || "0.30.0"
     };
   }
   if (env.GROKBOT_CREDENTIALS_COMMAND) return loadCommandCredentials(env);
@@ -71,7 +71,7 @@ function loadCommandCredentials(env = process.env) {
     source: "command",
     accessToken: stringField(parsed, "accessToken"),
     machineId: stringField(parsed, "machineId"),
-    clientVersion: stringField(parsed, "clientVersion") || env.GROKBOT_CLIENT_VERSION || "0.27.0"
+    clientVersion: stringField(parsed, "clientVersion") || env.GROKBOT_CLIENT_VERSION || "0.30.0"
   };
 }
 
@@ -90,7 +90,7 @@ function loadMacSafeStorage(env = process.env) {
     source: "mac_safe_storage",
     accessToken: decryptSafeStorage(account["cursor-access-token"], keychain.stdout.trimEnd()),
     machineId: decryptSafeStorage(store["cursor-machine-id"], keychain.stdout.trimEnd()),
-    clientVersion: env.GROKBOT_CLIENT_VERSION || "0.24.0"
+    clientVersion: env.GROKBOT_CLIENT_VERSION || "0.30.0"
   };
 }
 
@@ -126,7 +126,7 @@ export function decodeLinuxSafeStorage(store, keyringPassword, env = process.env
       source: "linux_safe_storage",
       accessToken: decryptLinuxSafeStorage(stringField(account, "cursor-access-token"), keyringPassword),
       machineId: decryptLinuxSafeStorage(stringField(store, "cursor-machine-id"), keyringPassword),
-      clientVersion: env.GROKBOT_CLIENT_VERSION || "0.27.0"
+      clientVersion: env.GROKBOT_CLIENT_VERSION || "0.30.0"
     };
   } catch {
     throw new AppError("linux_secrets_invalid", "Grok Bot Linux secure storage is invalid or unsupported", 503);
@@ -157,14 +157,17 @@ export function validateCredentials(credentials, now = Date.now()) {
 }
 
 export function cursorChecksum(machineId, now = Date.now()) {
-  const timestamp = BigInt(Math.floor(now / 1_000_000));
+  const timestamp = Math.floor(now / 1_000_000);
+  // The desktop client uses JavaScript bitwise shifts here. Those operators
+  // coerce to signed 32-bit integers and mask the shift count modulo 32.
+  // Keep that behavior byte-for-byte instead of replacing it with BigInt math.
   const bytes = Buffer.from([
-    Number((timestamp >> 40n) & 255n),
-    Number((timestamp >> 32n) & 255n),
-    Number((timestamp >> 24n) & 255n),
-    Number((timestamp >> 16n) & 255n),
-    Number((timestamp >> 8n) & 255n),
-    Number(timestamp & 255n)
+    (timestamp >> 40) & 255,
+    (timestamp >> 32) & 255,
+    (timestamp >> 24) & 255,
+    (timestamp >> 16) & 255,
+    (timestamp >> 8) & 255,
+    timestamp & 255
   ]);
   let previous = 165;
   for (let index = 0; index < bytes.length; index += 1) {

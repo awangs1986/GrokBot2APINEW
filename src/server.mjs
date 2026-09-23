@@ -13,6 +13,7 @@ import {
 } from "./openai.mjs";
 import { modelList } from "./models.mjs";
 import { AiServiceStreamChatClient } from "./ai-service.mjs";
+import { GrokBotServiceClient } from "./grok-bot-service.mjs";
 import { GrokBotInferenceClient, usageFromState } from "./upstream.mjs";
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -66,15 +67,19 @@ export function createApp(config = {}) {
 export function configuredUpstream(env = process.env) {
   const config = {
     backend: env.GROKBOT_BACKEND,
+    serviceBackend: env.GROKBOT_SERVICE_BACKEND,
     upstreamModel: env.GROKBOT_UPSTREAM_MODEL || "grok-4.5",
-    timeoutMs: Number.parseInt(env.GROKBOT_UPSTREAM_TIMEOUT_MS || "", 10) || 90_000
+    timeoutMs: Number.parseInt(env.GROKBOT_UPSTREAM_TIMEOUT_MS || "", 10) || 90_000,
+    agentId: env.GROKBOT_AGENT_ID,
+    pollIntervalMs: Number.parseInt(env.GROKBOT_AGENT_POLL_INTERVAL_MS || "", 10) || 500
   };
   const mode = (env.GROKBOT_UPSTREAM_MODE || "inference").trim().toLowerCase();
   if (mode === "inference") return new GrokBotInferenceClient(config);
   if (mode === "ai-stream-chat") return new AiServiceStreamChatClient(config);
+  if (mode === "grokbot-service") return new GrokBotServiceClient(config);
   throw new AppError(
     "invalid_upstream_mode",
-    "GROKBOT_UPSTREAM_MODE must be 'inference' or 'ai-stream-chat'",
+    "GROKBOT_UPSTREAM_MODE must be 'inference', 'ai-stream-chat', or 'grokbot-service'",
     503
   );
 }

@@ -577,7 +577,7 @@ function listen(config = {}) {
   const app = createApp({
     publicModel: "grok-4.5",
     key: "test-key",
-    credentialProvider: { get: async () => ({ accessToken: fakeJwt(), machineId: "machine-id-1234567890", clientVersion: "0.27.0" }) },
+    credentialProvider: { get: async () => ({ accessToken: fakeJwt(), machineId: "machine-id-1234567890", clientVersion: "0.30.0" }) },
     upstream: fakeUpstream([{ type: "done", state: fakeState("") }]),
     ...config
   });

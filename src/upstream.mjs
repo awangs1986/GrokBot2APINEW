@@ -83,7 +83,7 @@ export class GrokBotInferenceClient {
           authorization: `Bearer ${credentials.accessToken}`,
           "x-cursor-checksum": cursorChecksum(credentials.machineId),
           "x-cursor-client-type": "sand",
-          "x-cursor-client-version": credentials.clientVersion || "0.27.0",
+          "x-cursor-client-version": credentials.clientVersion || "0.30.0",
           "x-sand-box-namespace": "prod",
           "x-ghost-mode": "true",
           "x-request-id": requestId,

@@ -43,6 +43,12 @@ cp -n .env.example .env
 通过认证到达上游但于 September 22, 2026 收到 `unimplemented`，因此不是
 旧 `inference` 的可用替代方案。
 
+`GROKBOT_UPSTREAM_MODE=grokbot-service` 是基于当前桌面 0.30.0
+`GrokBotService` 的新文本路径。它必须同时设置明确的
+`GROKBOT_AGENT_ID`；程序绝不会自动挑选已有 Bot 或现有对话。该模式仍在
+验证阶段，暂时只支持文字，Pi 工具定义和工具结果会在发送前返回
+`upstream_tools_not_supported`，不会被悄悄忽略或发给 Bot。
+
 ```sh
 node --env-file=.env bin/grokbot2api.mjs
 ```
@@ -108,7 +114,7 @@ cp -n examples/pi/models.json ~/.pi/agent/models.json
 pi --provider grokbot --model grok-4.5 --thinking off --no-tools -p "只回复 OK"
 ```
 
-只有使用默认 `inference` 模式、且文字验收成功后，才从本项目目录做只读工具验证：
+只有使用已验证支持工具的上游模式、且文字验收成功后，才从本项目目录做只读工具验证：
 
 ```sh
 pi --provider grokbot --model grok-4.5 --thinking off --tools read \
@@ -147,6 +153,9 @@ npm run check
 
 - `GROKBOT_UPSTREAM_MODE=ai-stream-chat` 仅支持文字；它会明确返回
   `upstream_tools_not_supported`，不是 Pi 的工具故障或登录故障。
+- `GROKBOT_UPSTREAM_MODE=grokbot-service` 目前也仅支持文字，并且要求
+  `GROKBOT_AGENT_ID`。它通过 transcript 将文字回复映射回 Responses；Pi
+  工具循环要等 Grok Bot 的工具 transcript 协议经单独真实验收后才能启用。
 - 单个 sidecar 只允许一个生成请求，多个 Pi 会话同时请求会得到 `429 concurrency_limited`。
 - 使用 Pi 完整历史回传方式；不支持服务端 `previous_response_id` 历史恢复。
 - 不支持图片、文件输入、内置搜索、自定义 grammar 工具、完整 reasoning 内容或完整 Responses 功能。

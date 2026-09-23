@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import crypto from "node:crypto";
-import { decodeLinuxSafeStorage, loadCredentials, validateCredentials } from "../src/credentials.mjs";
+import { cursorChecksum, decodeLinuxSafeStorage, loadCredentials, validateCredentials } from "../src/credentials.mjs";
+
+test("matches the desktop JavaScript checksum bit-shift behavior", () => {
+  assert.equal(
+    cursorChecksum("machine-id-1234567890", 1_700_000_000_000),
+    "Vfb45Bi9machine-id-1234567890"
+  );
+});
 
 test("loads credentials from an absolute command without shell parsing", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grokbot2api-credentials-"));
@@ -14,14 +21,14 @@ test("loads credentials from an absolute command without shell parsing", () => {
 console.log(JSON.stringify({
   accessToken: "${fakeJwt()}",
   machineId: "machine-id-1234567890",
-  clientVersion: "0.27.0"
+  clientVersion: "0.30.0"
 }));
 `, { mode: 0o700 });
     const credentials = loadCredentials({ GROKBOT_CREDENTIALS_COMMAND: helper });
     validateCredentials(credentials);
     assert.equal(credentials.source, "command");
     assert.equal(credentials.machineId, "machine-id-1234567890");
-    assert.equal(credentials.clientVersion, "0.27.0");
+  assert.equal(credentials.clientVersion, "0.30.0");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

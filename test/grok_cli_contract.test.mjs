@@ -85,7 +85,7 @@ function listen(config = {}) {
       get: async () => ({
         accessToken: fakeJwt(),
         machineId: "machine-id-1234567890",
-        clientVersion: "0.27.0"
+        clientVersion: "0.30.0"
       })
     },
     ...config

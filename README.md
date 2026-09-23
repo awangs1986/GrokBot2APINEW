@@ -70,6 +70,27 @@ error `unimplemented` on September 22, 2026, so it is **not** a working
 fallback. Do not point Pi at this mode unless you are investigating a future
 desktop/upstream change.
 
+`GROKBOT_UPSTREAM_MODE=grokbot-service` uses the current desktop 0.30.0
+`aiserver.v1.GrokBotService` message and durable-transcript route. A metadata
+probe on this machine returned HTTP 200 with the desktop session credentials.
+The mode is intentionally opt-in and requires an explicit `GROKBOT_AGENT_ID`:
+it never lists and silently selects an existing Bot, so it cannot accidentally
+write into a personal conversation. It presently supports **text only**. It
+rejects Pi/Grok CLI tools and tool-result continuations before any message is
+sent, because the corresponding transcript tool protocol is not yet verified.
+
+```sh
+GROKBOT_UPSTREAM_MODE=grokbot-service
+GROKBOT_AGENT_ID=<the deliberate test Bot id>
+GROKBOT_AGENT_POLL_INTERVAL_MS=500
+```
+
+The text path snapshots the transcript, sends a nonce-tagged message, checks
+delivery, and reads only a newer assistant row after the matching nonce appears.
+It does not emit credentials, agent IDs, prompts, transcript entries, or replies
+to service logs. Configure a throwaway/test Bot, not a conversation you depend
+on, before doing the first live smoke.
+
 ## Run locally
 
 ```sh
@@ -154,7 +175,7 @@ It must be an absolute path, is executed without a shell on every request, and
 must print a single JSON object:
 
 ```json
-{"accessToken":"eyJ...","machineId":"...","clientVersion":"0.27.0"}
+{"accessToken":"eyJ...","machineId":"...","clientVersion":"0.30.0"}
 ```
 
 The sidecar validates token shape/expiry and machine id, then discards the
