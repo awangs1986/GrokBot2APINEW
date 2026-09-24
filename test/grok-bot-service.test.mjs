@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import https from "node:https";
 import {
   buildGetGrokBotSendStatusRequest,
+  buildCreateGrokBotAgentRequest,
   buildListGrokBotTranscriptEntriesRequest,
   buildSendGrokBotUserMessageRequest,
   decodeGrokBotSendStatusResponse,
@@ -34,6 +35,9 @@ test("encodes the desktop GrokBotService send request with explicit agent and de
 });
 
 test("encodes send-status and transcript requests", () => {
+  const created = parseProto(buildCreateGrokBotAgentRequest("agent-test"));
+  assert.equal(fieldText(created, 8), "agent-test");
+  assert.equal(Number(fieldNumber(created, 9)), 2);
   const status = parseProto(buildGetGrokBotSendStatusRequest({ agentId: "agent-test", messageId: "nonce-test" }));
   assert.equal(fieldText(status, 1), "agent-test");
   assert.equal(fieldText(status, 2), "nonce-test");
@@ -112,8 +116,8 @@ test("uses the current unary protobuf route, not the retired Connect stream enve
 test("uses an exact prompt nonce and a completed assistant transcript row", () => {
   const baseline = { generation: 3, entryIds: new Set(["old"]), maxUpdatedSeq: 5n, maxSeq: 5n };
   const entries = [
-    transcriptEntry({ seq: 6, updatedSeq: 6, entryId: "user", body: { kind: "message", role: "user", clientNonce: "nonce-test", content: "fake" } }),
-    transcriptEntry({ seq: 7, updatedSeq: 7, entryId: "assistant", body: { kind: "message", role: "assistant", content: "fake result", isStreaming: false } })
+    transcriptEntry({ seq: 6, updatedSeq: 6, entryId: "user", body: { kind: "message", role: "user", clientNonce: "nonce-test", requestId: "request-test", content: "fake" } }),
+    transcriptEntry({ seq: 7, updatedSeq: 7, entryId: "assistant", body: { kind: "message", role: "assistant", requestId: "request-test", content: "fake result", isStreaming: false } })
   ];
   assert.deepEqual(newestAssistantText(entries, baseline, "nonce-test"), {
     key: "assistant:7",
@@ -148,45 +152,87 @@ test("recognizes completed send-message text linked by the user request id", () 
   });
 });
 
+test("never returns another conversation's text after our nonce echo", () => {
+  const baseline = { generation: 3, entryIds: new Set(), maxUpdatedSeq: 0n, maxSeq: 0n };
+  const user = transcriptEntry({
+    seq: 1, updatedSeq: 1, entryId: "user",
+    body: { kind: "message", role: "user", clientNonce: "nonce-test", requestId: "request-test", content: "fake" }
+  });
+  const unrelated = transcriptEntry({
+    seq: 2, updatedSeq: 2, entryId: "other-reply",
+    body: { kind: "send-message", requestId: "other-request", message: { type: "text", content: "wrong reply" } }
+  });
+  const own = transcriptEntry({
+    seq: 3, updatedSeq: 3, entryId: "own-reply",
+    body: { kind: "send-message", requestId: "request-test", message: { type: "text", content: "our reply" } }
+  });
+  const laterUnrelated = transcriptEntry({
+    seq: 4, updatedSeq: 4, entryId: "later-other-reply",
+    body: { kind: "message", role: "assistant", requestId: "other-request", content: "another wrong reply", isStreaming: false }
+  });
+
+  assert.equal(newestAssistantText([user, unrelated], baseline, "nonce-test"), null);
+  assert.equal(newestAssistantText([user, unrelated, own, laterUnrelated], baseline, "nonce-test")?.text, "our reply");
+  assert.equal(newestAssistantText([user, own], baseline, ""), null);
+});
+
+test("does not guess a reply when the nonce echo lacks a request id", () => {
+  const baseline = { generation: 3, entryIds: new Set(), maxUpdatedSeq: 0n, maxSeq: 0n };
+  const entries = [
+    transcriptEntry({ seq: 1, updatedSeq: 1, entryId: "user", body: { kind: "message", role: "user", clientNonce: "nonce-test", content: "fake" } }),
+    transcriptEntry({ seq: 2, updatedSeq: 2, entryId: "reply", body: { kind: "send-message", message: { type: "text", content: "unknown reply" } } })
+  ];
+  assert.equal(newestAssistantText(entries, baseline, "nonce-test"), null);
+});
+
+test("does not guess a reply when the assistant row lacks a request id", () => {
+  const baseline = { generation: 3, entryIds: new Set(), maxUpdatedSeq: 0n, maxSeq: 0n };
+  const entries = [
+    transcriptEntry({ seq: 1, updatedSeq: 1, entryId: "user", body: { kind: "message", role: "user", clientNonce: "nonce-test", requestId: "request-test", content: "fake" } }),
+    transcriptEntry({ seq: 2, updatedSeq: 2, entryId: "reply", body: { kind: "send-message", message: { type: "text", content: "unknown reply" } } })
+  ];
+  assert.equal(newestAssistantText(entries, baseline, "nonce-test"), null);
+});
+
 test("does not return an assistant row before the matching sent user row", () => {
   const baseline = { generation: 3, entryIds: new Set(), maxUpdatedSeq: 0n, maxSeq: 0n };
   const entries = [
     transcriptEntry({ seq: 1, updatedSeq: 1, entryId: "assistant", body: { kind: "message", role: "assistant", content: "wrong conversation", isStreaming: false } }),
-    transcriptEntry({ seq: 2, updatedSeq: 2, entryId: "user", body: { kind: "message", role: "user", clientNonce: "nonce-test", content: "fake" } })
+    transcriptEntry({ seq: 2, updatedSeq: 2, entryId: "user", body: { kind: "message", role: "user", clientNonce: "nonce-test", requestId: "request-test", content: "fake" } })
   ];
   assert.equal(newestAssistantText(entries, baseline, "nonce-test"), null);
 });
 
 test("waits for a stable legacy assistant row after matching the sent nonce", async () => {
-  const client = new GrokBotServiceClient({ agentId: "agent-test", pollIntervalMs: 1, timeoutMs: 200, randomUuid: () => "fixed-nonce" });
+  const client = new GrokBotServiceClient({ sessionAgents: { resolve: async () => "agent-test" }, pollIntervalMs: 1, timeoutMs: 200, randomUuid: () => "fixed-nonce" });
   const baselinePage = transcriptPage(1, []);
   const replyPage = transcriptPage(1, [
-    transcriptEntry({ seq: 1, updatedSeq: 1, entryId: "user", body: { kind: "message", role: "user", clientNonce: "fixed-nonce", content: "fake" } }),
-    transcriptEntry({ seq: 2, updatedSeq: 2, entryId: "assistant", body: { kind: "message", role: "assistant", content: "legacy fake response" } })
+    transcriptEntry({ seq: 1, updatedSeq: 1, entryId: "user", body: { kind: "message", role: "user", clientNonce: "fixed-nonce", requestId: "request-test", content: "fake" } }),
+    transcriptEntry({ seq: 2, updatedSeq: 2, entryId: "assistant", body: { kind: "message", role: "assistant", requestId: "request-test", content: "legacy fake response" } })
   ]);
   let listCalls = 0;
   client.listTranscriptEntries = async () => (listCalls++ === 0 ? baselinePage : replyPage);
   client.sendUserMessage = async () => ({ delivery: "accepted_temporal" });
   client.getSendStatus = async () => ({ status: "accepted" });
   const events = [];
-  for await (const event of client.stream({ messages: [{ role: "user", text: "fake" }], tools: [] }, {})) events.push(event);
+  for await (const event of client.stream({ sessionKey: "session-test", messages: [{ role: "user", text: "fake" }], tools: [] }, {})) events.push(event);
   assert.deepEqual(events.map((event) => event.type), ["text", "done"]);
   assert.equal(events[0].text, "legacy fake response");
   assert.ok(listCalls >= 3);
 });
 
-test("rejects calls before sending if the agent is not explicitly configured", async () => {
+test("rejects calls before sending if no stable Pi session is present", async () => {
   const client = new GrokBotServiceClient();
   let sent = false;
   client.sendUserMessage = async () => { sent = true; };
   await assert.rejects(async () => {
     for await (const _event of client.stream({ messages: [{ role: "user", text: "fake" }], tools: [] }, {})) {}
-  }, { code: "grokbot_agent_id_not_configured" });
+  }, { code: "grokbot_session_id_required" });
   assert.equal(sent, false);
 });
 
 test("rejects Pi tools before sending because transcript tool protocol is not verified", async () => {
-  const client = new GrokBotServiceClient({ agentId: "agent-test" });
+  const client = new GrokBotServiceClient({ sessionAgents: { resolve: async () => "agent-test" } });
   let sent = false;
   client.sendUserMessage = async () => { sent = true; };
   await assert.rejects(async () => {
@@ -195,10 +241,10 @@ test("rejects Pi tools before sending because transcript tool protocol is not ve
   assert.equal(sent, false);
 });
 
-test("selects GrokBotService only when the explicit service mode and agent id are configured", () => {
-  const client = configuredUpstream({ GROKBOT_UPSTREAM_MODE: "grokbot-service", GROKBOT_AGENT_ID: "agent-test" });
+test("selects GrokBotService only in explicit service mode with a private session store", () => {
+  const client = configuredUpstream({ GROKBOT_UPSTREAM_MODE: "grokbot-service", GROKBOT_SESSION_STORE: "/tmp/fixture-sessions.json" });
   assert.ok(client instanceof GrokBotServiceClient);
-  assert.equal(client.agentId, "agent-test");
+  assert.equal(client.sessionAgents.path, "/tmp/fixture-sessions.json");
 });
 
 test("decodes transcript protobuf rows without leaking them to logs", () => {

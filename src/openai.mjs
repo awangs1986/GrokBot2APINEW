@@ -25,6 +25,7 @@ export function normalizeResponsesRequest(body, config = {}) {
     tools: responseTools(body.tools),
     messages: responseInputMessages(body),
     instructions: typeof body.instructions === "string" ? body.instructions : "",
+    sessionKey: stableSessionKey(body, config.sessionId),
     maxTokens: integerOr(body.max_output_tokens, config.maxTokens),
     ...conversationIds(body)
   };
@@ -452,16 +453,19 @@ function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function conversationIds(body) {
-  const key = [
+function stableSessionKey(body, headerSessionId) {
+  return [
+    stringFrom(headerSessionId),
     stringFrom(body.prompt_cache_key),
-    stringFrom(body.previous_response_id),
     stringFrom(body.conversation_id),
     stringFrom(body.session_id),
     stringFrom(body.metadata?.conversation_id),
     stringFrom(body.metadata?.session_id)
-  ].find(Boolean);
-  const base = key || crypto.randomUUID();
+  ].find(Boolean) || "";
+}
+
+function conversationIds(body) {
+  const base = stableSessionKey(body) || stringFrom(body.previous_response_id) || crypto.randomUUID();
   return {
     conversationId: stableUuid("conversation", base),
     conversationGroupId: stableUuid("conversation-group", base)

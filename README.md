@@ -6,6 +6,9 @@ Grok CLI / Pi Coding Agent compatible Responses API.
 For Pi, use `api: "openai-responses"`. See the [Pi integration guide](docs/pi-agent.md)
 and [models.json example](examples/pi/models.json). The pinned real-Pi CLI contract
 tests use simulated upstream protocol frames, not a live Grok Bot account.
+An explicit text-only `/skill:name` also works through the current
+`grokbot-service` route with `--no-tools`; automatic skill discovery and skills
+that require Pi tools are not supported by this route yet.
 
 This repository is intentionally separate from Cursor2API. Grok Bot uses
 desktop session state and Cursor/Grok Bot `aiserver` endpoints; Cursor2API uses
@@ -71,25 +74,29 @@ fallback. Do not point Pi at this mode unless you are investigating a future
 desktop/upstream change.
 
 `GROKBOT_UPSTREAM_MODE=grokbot-service` uses the current desktop 0.30.0
-`aiserver.v1.GrokBotService` message and durable-transcript route. A metadata
-probe on this machine returned HTTP 200 with the desktop session credentials.
-The mode is intentionally opt-in and requires an explicit `GROKBOT_AGENT_ID`:
-it never lists and silently selects an existing Bot, so it cannot accidentally
-write into a personal conversation. It presently supports **text only**. It
+`aiserver.v1.GrokBotService` message and durable-transcript route. The mode is
+intentionally opt-in and requires a stable session ID (Pi sends one). It creates
+one new Bot per Pi session and signed-in account, stores the mapping under
+`~/.config/grokbot2api/sessions.json` (mode 0600), reuses it on subsequent
+turns and after service restarts, and never auto-deletes old Bots. Requests
+without a stable session ID are rejected before creating or sending anything.
+It presently supports **text only**. It
 rejects Pi/Grok CLI tools and tool-result continuations before any message is
 sent, because the corresponding transcript tool protocol is not yet verified.
 
 ```sh
 GROKBOT_UPSTREAM_MODE=grokbot-service
-GROKBOT_AGENT_ID=<the deliberate test Bot id>
+# Optional absolute path; default is ~/.config/grokbot2api/sessions.json
+GROKBOT_SESSION_STORE=/home/user/.config/grokbot2api/sessions.json
 GROKBOT_AGENT_POLL_INTERVAL_MS=500
 ```
 
-The text path snapshots the transcript, sends a nonce-tagged message, checks
-delivery, and reads only a newer assistant row after the matching nonce appears.
+The text path snapshots that session's Bot transcript, sends a nonce-tagged message, checks
+delivery, and reads only a newer assistant row after both the matching nonce
+and request ID appear. The public `grok-4.5` model name does not select the
+actual model for a Grok Bot service agent; its Bot configuration does.
 It does not emit credentials, agent IDs, prompts, transcript entries, or replies
-to service logs. Configure a throwaway/test Bot, not a conversation you depend
-on, before doing the first live smoke.
+to service logs. Run only one sidecar process for a given session store.
 
 ## Run locally
 

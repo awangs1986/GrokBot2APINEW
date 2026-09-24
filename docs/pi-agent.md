@@ -5,7 +5,7 @@
 使用 **`openai-responses`**，不需要增加 Chat Completions 接口，也不需要 Pi 扩展。
 这是自定义 `grokbot` provider，不是 Pi 内置的 `xai` provider 或它的登录流程。
 
-本仓库锁定 `@earendil-works/pi-coding-agent@0.87.0` 作为**开发/测试依赖**，
+本仓库锁定 `@earendil-works/pi-coding-agent@0.87.1` 作为**开发/测试依赖**，
 测试直接启动该包的真实 Pi CLI，不会调用你电脑上全局安装的 Pi。
 安装/运行这组开发测试需要 **Node >= 22.19.0**；sidecar 自身仍无运行时 npm 依赖。
 旧 `@mariozechner/pi-coding-agent` 版本和其他 Pi 分支未纳入本次契约测试。
@@ -44,8 +44,9 @@ cp -n .env.example .env
 旧 `inference` 的可用替代方案。
 
 `GROKBOT_UPSTREAM_MODE=grokbot-service` 是基于当前桌面 0.30.0
-`GrokBotService` 的新文本路径。它必须同时设置明确的
-`GROKBOT_AGENT_ID`；程序绝不会自动挑选已有 Bot 或现有对话。该模式仍在
+`GrokBotService` 的新文本路径。它要求稳定的 Pi session ID，为每个 Pi 会话
+（按登录账号隔离）创建一个独立的新 Bot；映射保存在私有文件中，重启继续使用，
+不会自动删除旧 Bot。缺少稳定 ID 的请求会被拒绝，不会退回到旧的共享 Bot。该模式仍在
 验证阶段，暂时只支持文字，Pi 工具定义和工具结果会在发送前返回
 `upstream_tools_not_supported`，不会被悄悄忽略或发给 Bot。
 
@@ -94,14 +95,14 @@ cp -n examples/pi/models.json ~/.pi/agent/models.json
 ```
 
 在运行 Pi 的终端设置 `GROKBOT2API_KEY`，值必须与 sidecar 相同。
-模板中的 `$GROKBOT2API_KEY` 是 Pi 0.87.0 的环境变量插值，不是直接发送的字符串。
+模板中的 `$GROKBOT2API_KEY` 是 Pi 0.87.1 的环境变量插值，不是直接发送的字符串。
 若你已安装 Pi，先用 `pi --version` 确认版本；旧版本的配置语法可能不同。
 
 - `baseUrl` 以 `/v1` 结尾，**不要**写成 `/v1/responses`。
 - 地址是从 **Pi 进程所在机器**访问的。不同机器不要填 `127.0.0.1`；推荐 SSH 隧道或受保护的 HTTPS 反向代理，不要裸露到公网。
 - `reasoning: false` 仅关闭 Pi 的 reasoning 参数/思考展示路径，**不代表关闭上游模型推理**。
-  上游仍使用该模型的默认参数，当前 `grok-4.5` 为 `effort: high`、`fast: true`。
-  这样也避免 Pi 发送该模型不支持的 `none` / `xhigh`。
+  `GrokBotService` 发送请求时没有模型选择字段；实际模型由目标 Bot 的配置决定，
+  `grok-4.5` 目前只是 Pi/sidecar 暴露的兼容模型名，不能据此断言实际用了 Grok 4.5。
 - `input: ["text"]` 是有意限制：这个 sidecar 还没有实现图片转换。
 - `contextWindow: 256000` 来自仓库静态目录，不是实时探测；`maxTokens: 8192` 是保守的客户端输出预算，不是已验证的上游最大输出限制。
 - 零 `cost` 仅是本地费用显示占位，不意味着账号调用免费、不消耗额度。
@@ -113,6 +114,22 @@ cp -n examples/pi/models.json ~/.pi/agent/models.json
 ```sh
 pi --provider grokbot --model grok-4.5 --thinking off --no-tools -p "只回复 OK"
 ```
+
+### 当前可用的纯文字 skill
+
+Pi 0.87.1 的显式 `/skill:名称` 会把该 `SKILL.md` 的说明展开到用户消息；
+当前 `grokbot-service` 能转发这段文字。已用隔离的文本-only skill 分别通过
+假上游契约测试和一次真实 Grok Bot 回复验收，不依赖文件或命令工具：
+
+```sh
+pi --provider grokbot --model grok-4.5 --thinking off --no-tools --no-extensions
+# 在 Pi 内输入：/skill:你的纯文字skill名称 你的问题
+```
+
+这只适用于**无需读取文件、执行脚本、调用工具**的 skill。Pi 自动发现 skill
+时只把名称、描述和路径放入系统提示；当前新上游仅转发最后一条用户文本，
+不会把这些系统提示或完整历史传给 Bot。因此尚不能依赖自动挑选 skill，
+也不能把显式 skill 的文字回答当成实际执行了它附带的脚本。
 
 只有使用已验证支持工具的上游模式、且文字验收成功后，才从本项目目录做只读工具验证：
 
@@ -154,7 +171,7 @@ npm run check
 - `GROKBOT_UPSTREAM_MODE=ai-stream-chat` 仅支持文字；它会明确返回
   `upstream_tools_not_supported`，不是 Pi 的工具故障或登录故障。
 - `GROKBOT_UPSTREAM_MODE=grokbot-service` 目前也仅支持文字，并且要求
-  `GROKBOT_AGENT_ID`。它通过 transcript 将文字回复映射回 Responses；Pi
+  稳定 Pi session ID。它通过 transcript 将文字回复映射回 Responses；Pi
   工具循环要等 Grok Bot 的工具 transcript 协议经单独真实验收后才能启用。
 - 单个 sidecar 只允许一个生成请求，多个 Pi 会话同时请求会得到 `429 concurrency_limited`。
 - 使用 Pi 完整历史回传方式；不支持服务端 `previous_response_id` 历史恢复。

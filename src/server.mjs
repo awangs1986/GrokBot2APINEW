@@ -70,7 +70,7 @@ export function configuredUpstream(env = process.env) {
     serviceBackend: env.GROKBOT_SERVICE_BACKEND,
     upstreamModel: env.GROKBOT_UPSTREAM_MODEL || "grok-4.5",
     timeoutMs: Number.parseInt(env.GROKBOT_UPSTREAM_TIMEOUT_MS || "", 10) || 90_000,
-    agentId: env.GROKBOT_AGENT_ID,
+    sessionStorePath: env.GROKBOT_SESSION_STORE,
     pollIntervalMs: Number.parseInt(env.GROKBOT_AGENT_POLL_INTERVAL_MS || "", 10) || 500
   };
   const mode = (env.GROKBOT_UPSTREAM_MODE || "inference").trim().toLowerCase();
@@ -110,7 +110,10 @@ async function handleResponses(req, res, runtime) {
   let request = null;
   try {
     const body = await readJsonBody(req, runtime.maxBodyBytes);
-    request = normalizeResponsesRequest(body.value, { defaultModel: runtime.publicModel });
+    request = normalizeResponsesRequest(body.value, {
+      defaultModel: runtime.publicModel,
+      sessionId: req.headers.session_id || req.headers["x-opencode-session"]
+    });
     request.signal = controller.signal;
     request.requestId = request.requestId || crypto.randomUUID();
     request.requestBodyBytes = body.bytes;

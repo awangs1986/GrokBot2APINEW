@@ -3,6 +3,7 @@ import https from "node:https";
 import { cursorChecksum } from "./credentials.mjs";
 import { AppError, hardStopStatus, rateLimitError } from "./errors.mjs";
 import { parseProto, protoField, protoMessage } from "./proto.mjs";
+import { SessionAgents } from "./session-agents.mjs";
 
 const BACKEND = new URL("https://api2.cursor.sh/aiserver.v1.GrokBotService/");
 const DEFAULT_POLL_INTERVAL_MS = 500;
@@ -14,7 +15,7 @@ const DEFAULT_TRANSCRIPT_LIMIT = 100;
 export class GrokBotServiceClient {
   constructor(config = {}) {
     this.backend = serviceBackend(config.serviceBackend || BACKEND);
-    this.agentId = stringValue(config.agentId);
+    this.sessionAgents = config.sessionAgents || new SessionAgents({ path: config.sessionStorePath });
     this.timeoutMs = positiveInteger(config.timeoutMs, 90_000);
     this.pollIntervalMs = positiveInteger(config.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
     this.transcriptLimit = boundedInteger(config.transcriptLimit, DEFAULT_TRANSCRIPT_LIMIT, 1, 500);
@@ -24,22 +25,15 @@ export class GrokBotServiceClient {
 
   async *stream(request, credentials) {
     assertTextOnlyRequest(request);
-    if (!this.agentId) {
-      throw new AppError(
-        "grokbot_agent_id_not_configured",
-        "GROKBOT_AGENT_ID must be explicitly configured before Grok Bot messages can be sent",
-        503
-      );
-    }
-
     const prompt = latestUserPrompt(request.messages);
+    const agentId = await this.sessionAgents.resolve(request.sessionKey, credentials, this, request.signal);
     const upstreamRequestId = request.requestId || this.randomUuid();
-    const baselinePage = await this.listTranscriptEntries(this.agentId, undefined, this.transcriptLimit, credentials, upstreamRequestId, request.signal);
+    const baselinePage = await this.listTranscriptEntries(agentId, undefined, this.transcriptLimit, credentials, upstreamRequestId, request.signal);
     const baseline = transcriptBaseline(baselinePage);
     const sentAtMs = Date.now();
     const messageId = this.randomUuid();
     const send = await this.sendUserMessage({
-      agentId: this.agentId,
+      agentId,
       messageId,
       text: prompt,
       sentAtMs,
@@ -52,9 +46,9 @@ export class GrokBotServiceClient {
       });
     }
 
-    await this.assertSendAccepted(this.agentId, messageId, credentials, upstreamRequestId, request.signal);
+    await this.assertSendAccepted(agentId, messageId, credentials, upstreamRequestId, request.signal);
     const text = await this.waitForAssistantText({
-      agentId: this.agentId,
+      agentId,
       baseline,
       messageId,
       credentials,
@@ -78,6 +72,12 @@ export class GrokBotServiceClient {
     const body = protoMessage([protoField(2, 0, 1)]);
     const response = await this.unary("ListGrokBotAgents", body, credentials, requestId, signal);
     return decodeListAgentsResponse(response);
+  }
+
+  async createAgent(agentId, credentials, requestId = crypto.randomUUID(), signal) {
+    const response = await this.unary("CreateGrokBotAgent", buildCreateGrokBotAgentRequest(agentId), credentials, requestId, signal);
+    const agent = messageField(parseProto(response), 1);
+    return { id: agent ? textField(agent, 12) : "" };
   }
 
   async sendUserMessage(input, credentials, requestId = crypto.randomUUID(), signal) {
@@ -187,6 +187,21 @@ export class GrokBotServiceClient {
   }
 }
 
+export function buildCreateGrokBotAgentRequest(agentId) {
+  const id = requiredString(agentId, "agentId");
+  return protoMessage([
+    protoField(1, 2, id),
+    protoField(2, 2, "Pi session"),
+    protoField(3, 2, "Isolated Pi Coding Agent conversation"),
+    protoField(4, 2, "Pi session"),
+    protoField(5, 2, "circle"),
+    protoField(6, 2, "blue"),
+    protoField(8, 2, id),
+    protoField(9, 0, 2), // TEMPORAL
+    protoField(11, 0, 1) // Suppress the introduction message.
+  ]);
+}
+
 export function buildSendGrokBotUserMessageRequest(input) {
   const fields = [
     protoField(1, 2, requiredString(input.agentId, "agentId")),
@@ -284,26 +299,29 @@ export function decodeTranscriptEntry(bytes) {
 }
 
 export function newestAssistantText(entries, baseline, messageId = "") {
+  if (!messageId) return null;
   let sentEntrySeq = null;
+  let sentRequestId = "";
   if (messageId) {
     for (const entry of entries) {
       if (!isNewTranscriptEntry(entry, baseline) || !entry.body) continue;
       const value = parseTranscriptBody(entry.body);
       if (value?.kind === "message" && value.role === "user" && value.clientNonce === messageId) {
         sentEntrySeq = entry.seq;
+        sentRequestId = value.requestId;
         break;
       }
     }
-    // Never associate a reply with this request until the durable transcript
-    // echoes its exact client nonce. This prevents a simultaneously used
-    // desktop conversation from being returned to the API caller.
-    if (sentEntrySeq === null) return null;
+    // A nonce echo alone does not identify later assistant rows if the user
+    // is chatting with the same Bot concurrently. Require the requestId too.
+    if (sentEntrySeq === null || typeof sentRequestId !== "string" || !sentRequestId) return null;
   }
   const candidates = [];
   for (const entry of entries) {
     if (!isNewTranscriptEntry(entry, baseline) || !entry.body) continue;
     if (sentEntrySeq !== null && entry.seq <= sentEntrySeq) continue;
     const value = parseTranscriptBody(entry.body);
+    if (messageId && value?.requestId !== sentRequestId) continue;
     const textEntry = assistantTextEntry(value);
     if (!textEntry) continue;
     candidates.push({

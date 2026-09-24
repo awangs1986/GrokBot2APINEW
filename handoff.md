@@ -9,6 +9,47 @@ Repository: `https://github.com/awangs1986/GrokBot2APINEW`
 Branch: `arena/01a0c8c1-grokbot2apinew`
 Base commit: `3333634` (`feat: add Pi agent Responses integration and contract tests`)
 
+## September 24, 2026 update
+
+- Session isolation is now implemented: `src/session-agents.mjs` maps a stable
+  Pi session ID plus the authenticated desktop account to one dedicated
+  temporal Grok Bot. The Bot is created on first request and preserved. The
+  mapping is atomic, mode 0600, and survives sidecar restarts; a persisted
+  pending creation is checked against the agent list before retrying. Session
+  IDs and account IDs are hashed, not written in plaintext. A request without
+  a stable session ID fails before any creation or message send.
+- The normal 8793 user service has been switched off the formerly shared test
+  Bot. Real Pi verification with three sequential text requests confirmed:
+  session A creates one Bot, A's second request reuses it, session B creates a
+  different Bot. All three received successful replies. The earlier shared
+  Bot was not deleted; no automatic deletion is implemented.
+- `npm test`: 71 pass, 2 pre-existing skips; `npm run test:pi`: 4 pass;
+  `npm run check` and `git diff --check` pass. Only text-only Pi requests work;
+  the Pi tool loop remains explicitly blocked.
+- Local Pi is `@earendil-works/pi-coding-agent@0.87.1`; this repository now pins
+  that same version for contract tests. Its existing `grokbot` provider points
+  to a user-level sidecar service on loopback port 8793. The local `.env` link
+  points to a private 0600 config outside the repository. Neither the ID nor
+  any credential belongs in this handoff.
+- A real Pi text-only `/skill:name` call succeeded against the authorized test
+  Bot with one upstream send, no tools, and a response matching the skill's
+  instruction. The new `test/pi_skill_contract.test.mjs` recreates the skill
+  prompt path with fake RPCs. `npm run test:pi` includes this test.
+- Explicit text-only skill instructions are included in the Pi user message
+  and currently reach Grok Bot. Automatic skill selection is *not* supported:
+  the adapter still ignores Pi's system prompt, and it does not implement
+  Pi tool definitions/results or full chat history. Desktop tool-call and
+  approval RPCs do not establish an arbitrary Pi tool-result round trip.
+- The local uncommitted transcript safety fix now requires both an exact user
+  nonce and the same nonempty `requestId` on the assistant row. The previous
+  code could mistake another conversation's newer reply for this one's.
+  `test/grok-bot-service.test.mjs` covers this. The local service was restarted
+  while idle and is healthy.
+- `grok-4.5` is only the Pi/sidecar-facing compatibility model name in the
+  current `GrokBotService` path. Its send RPC carries no model selector; the
+  target Bot decides which actual model runs.
+- The real skill smoke is separate from the fake-upstream tests.
+
 ## Current result
 
 The project now has a third, explicitly opt-in transport for the current Grok
@@ -26,10 +67,10 @@ Bot desktop release (`0.30.0`):
   the desktop session credentials.
 
 The new `GROKBOT_UPSTREAM_MODE=grokbot-service` path is text-only and requires
-an explicitly supplied `GROKBOT_AGENT_ID`. It snapshots the transcript, sends a
-nonce-tagged user message, waits for the matching user echo, and returns only a
-newer assistant message. It never auto-selects a Bot and does not log tokens,
-agent IDs, prompts, transcript bodies, or replies.
+a stable Pi session ID. It creates a dedicated Bot for each session/account,
+snapshots that Bot's transcript, sends a nonce-tagged user message, waits for
+the matching user echo, and returns only a reply with the same request ID. It
+does not log tokens, agent IDs, prompts, transcript bodies, or replies.
 
 The reference project `cniu6/grok_bot_2api_temp` is useful evidence for the
 overall product shape—an OpenAI-compatible sidecar in front of a Bot session—
@@ -58,9 +99,10 @@ replays the latest real reply successfully without sending a new message.
 Pi's default retry caused a second delivery attempt during the failed smoke,
 so future live smoke runs must disable retry.
 
-## What changed, currently uncommitted
+## Earlier implementation history (before the September 24 update)
 
-Do not overwrite the existing uncommitted work. The current worktree contains:
+The following files were part of the earlier implementation and are now tracked
+in the repository. Preserve the separate local edits described above:
 
 - `src/credentials.mjs`, `test/credentials.test.mjs`, `.env.example`, and
   `README.md`: Linux Grok Bot Safe Storage plus Secret Service credential
@@ -129,28 +171,12 @@ was sent during the final verification.
 
 ## Suggested next step
 
-Perform one controlled live text smoke only after the user supplies a
-throwaway/test Bot's agent ID or explicitly authorizes a test Bot:
-
-```sh
-GROKBOT_UPSTREAM_MODE=grokbot-service
-GROKBOT_AGENT_ID=<user-authorized-test-agent-id>
-node --env-file=.env bin/grokbot2api.mjs
-pi --provider grokbot --model grok-4.5 --thinking off --no-tools -p "只回复 OK"
-```
-
-Before this smoke, ensure the ID comes from the same currently signed-in
-desktop account and set Pi retry to disabled so one prompt produces one
-upstream delivery attempt.
-
-The smoke report must contain only delivery status, whether the nonce echo and
-assistant reply arrived, elapsed time, and reply size. Do not print the agent
-ID, prompt, reply, transcript, authorization header, or any token.
-
-If text succeeds, statically and then safely inspect the Grok Bot transcript
-tool-call/result/approval entries. Add a separate fake-upstream regression
-test for each discovered entry before enabling any Pi tool. Do not silently
-drop tool definitions or pretend the old `InferenceService` path is valid.
+Implement Pi's actual tool-call/result protocol only after finding a verified
+way to advertise Pi tools to the current Grok Bot service. The existing
+`SendGrokBotUserMessage` request has no tools field. Do not interpret desktop
+tool activity as Pi tool calls or enable Pi's `read`/`bash` without a real
+function-call round trip and explicit safety checks. Keep the local session
+store private and run one sidecar instance per store.
 
 ## Suggested skills
 

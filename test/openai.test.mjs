@@ -33,6 +33,15 @@ test("honors explicit max_output_tokens", () => {
   assert.equal(request.maxTokens, 128);
 });
 
+test("uses the Pi session header for Bot isolation and does not invent an ID", () => {
+  const fromHeader = normalizeResponsesRequest({ model: "grok-4.5", input: "hello" }, { sessionId: "pi-session" });
+  const fromBody = normalizeResponsesRequest({ model: "grok-4.5", prompt_cache_key: "pi-session", input: "hello" });
+  const withoutId = normalizeResponsesRequest({ model: "grok-4.5", input: "hello" });
+  assert.equal(fromHeader.sessionKey, "pi-session");
+  assert.equal(fromBody.sessionKey, "pi-session");
+  assert.equal(withoutId.sessionKey, "");
+});
+
 test("sanitizes tool JSON schema like the official client path", () => {
   const schema = sanitizeJsonSchema({
     $schema: "https://json-schema.org/draft/2020-12/schema",
